@@ -15,7 +15,7 @@ using Plang.Compiler.TypeChecker.Types;
 
 namespace Plang.Compiler.Backend.PEx;
 
-internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICodeGenerator
+internal class PExCodeGenerator : ICodeGenerator, IExpressionEmitter<CompilationContext>
 {
     public IEnumerable<CompiledFile> GenerateCode(ICompilerConfiguration job, Scope globalScope)
     {
@@ -151,7 +151,7 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
         {
             var varName = GetGlobalParamAndLocalVariableName(v);
             context.Write(output, $"  {varName} = ");
-            WriteExpr(context, output, value);
+            this.WriteExpr(context, output, value);
             context.WriteLine(output, $";");
         }
         context.WriteLine(output, "}");
@@ -717,7 +717,7 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
                         else
                         {
                             context.Write(output, $"{locationTemp} = ({GetPExType(assignStmt.Location.Type)}) ");
-                            WriteExpr(context, output, expr);
+                            this.WriteExpr(context, output, expr);
                             context.WriteLine(output, ";");
                         }
                     }
@@ -736,7 +736,7 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
                     locationTemp =>
                     {
                         context.Write(output, $"{locationTemp} = ({GetPExType(moveStmt.ToLocation.Type)}) ");
-                        WriteExpr(context, output,
+                        this.WriteExpr(context, output,
                             new VariableAccessExpr(moveStmt.FromVariable.SourceLocation, moveStmt.FromVariable));
                         context.WriteLine(output, ";");
                     }
@@ -746,9 +746,9 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
 
             case AssertStmt assertStmt:
                 context.Write(output, "Assert.fromModel((");
-                WriteExpr(context, output, assertStmt.Assertion);
+                this.WriteExpr(context, output, assertStmt.Assertion);
                 context.Write(output, ").getValue(), ");
-                WriteExpr(context, output, assertStmt.Message);
+                this.WriteExpr(context, output, assertStmt.Message);
                 context.Write(output, ");");
                 break;
 
@@ -757,7 +757,7 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
                 {
                     context.Write(output, $"{CompilationContext.ReturnValue} = ");
                     context.Write(output, $"({GetPExType(context.ReturnType)}) ");
-                    WriteExpr(context, output, returnStmt.ReturnValue);
+                    this.WriteExpr(context, output, returnStmt.ReturnValue);
                     context.WriteLine(output, ";");
                     context.Write(output, $"return {CompilationContext.ReturnValue};");
                 }
@@ -779,7 +779,7 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
                 else
                 {
                     context.Write(output, ", ");
-                    WriteExpr(context, output, gotoStmt.Payload);
+                    this.WriteExpr(context, output, gotoStmt.Payload);
                 }
 
                 context.WriteLine(output, ");");
@@ -796,13 +796,13 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
                 context.WriteLine(output, "// NOTE (TODO): We currently perform no typechecking on the payload!");
 
                 context.Write(output, $"{CompilationContext.CurrentMachine}.raiseEvent(");
-                WriteExpr(context, output, raiseStmt.Event);
+                this.WriteExpr(context, output, raiseStmt.Event);
                 if (raiseStmt.Payload.Count > 0)
                 {
                     // TODO: Determine how multi-payload raise statements are supposed to work
                     Debug.Assert(raiseStmt.Payload.Count == 1);
                     context.Write(output, ", ");
-                    WriteExpr(context, output, raiseStmt.Payload[0]);
+                    this.WriteExpr(context, output, raiseStmt.Payload[0]);
                 }
 
                 context.WriteLine(output, ");");
@@ -816,7 +816,7 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
 
             case PrintStmt printStmt:
                 context.Write(output, $"{CompilationContext.SchedulerVar}.getLogger().logModel(");
-                WriteExpr(context, output, printStmt.Message);
+                this.WriteExpr(context, output, printStmt.Message);
                 context.WriteLine(output, ".toString());");
                 break;
 
@@ -859,7 +859,7 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
                 var condTemp = context.FreshTempVar();
                 Debug.Assert(ifStmt.Condition.Type.IsSameTypeAs(PrimitiveType.Bool));
                 context.Write(output, $"{GetPExType(PrimitiveType.Bool)} {condTemp} = ");
-                WriteExpr(context, output, ifStmt.Condition);
+                this.WriteExpr(context, output, ifStmt.Condition);
                 context.WriteLine(output, ";");
 
                 var thenContext = flowContext.FreshBranchSubContext(context);
@@ -893,14 +893,14 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
 
             case SendStmt sendStmt:
                 context.Write(output, $"{CompilationContext.CurrentMachine}.sendEvent(");
-                WriteExpr(context, output, sendStmt.MachineExpr);
+                this.WriteExpr(context, output, sendStmt.MachineExpr);
                 context.Write(output, ", ");
-                WriteExpr(context, output, sendStmt.Evt);
+                this.WriteExpr(context, output, sendStmt.Evt);
                 context.Write(output, ", ");
                 if (sendStmt.Arguments.Count == 0)
                     context.Write(output, "null");
                 else if (sendStmt.Arguments.Count == 1)
-                    WriteExpr(context, output, sendStmt.Arguments[0]);
+                    this.WriteExpr(context, output, sendStmt.Arguments[0]);
                 else
                     throw new NotImplementedException(
                         "Send statements with more than one payload argument are not supported");
@@ -936,12 +936,12 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
                     {
                         context.Write(output, $"{structureTemp} = ");
                         context.Write(output, $"(({GetPExType(insertStmt.Variable.Type)}) ");
-                        WriteExpr(context, output, insertStmt.Variable);
+                        this.WriteExpr(context, output, insertStmt.Variable);
                         context.Write(output, ").add(");
 
-                        WriteExpr(context, output, insertStmt.Index);
+                        this.WriteExpr(context, output, insertStmt.Index);
                         context.Write(output, ", ");
-                        WriteExpr(context, output, insertStmt.Value);
+                        this.WriteExpr(context, output, insertStmt.Value);
 
                         context.WriteLine(output, ");");
                     }
@@ -961,9 +961,9 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
                     {
                         context.Write(output, $"{structureTemp} = ");
                         context.Write(output, $"(({GetPExType(addStmt.Variable.Type)}) ");
-                        WriteExpr(context, output, addStmt.Variable);
+                        this.WriteExpr(context, output, addStmt.Variable);
                         context.Write(output, ").add(");
-                        WriteExpr(context, output, addStmt.Value);
+                        this.WriteExpr(context, output, addStmt.Value);
                         context.WriteLine(output, ");");
                     }
                 );
@@ -985,14 +985,14 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
                     {
                         context.Write(output, $"{structureTemp} = ");
                         context.Write(output, $"(({GetPExType(removeStmt.Variable.Type)}) ");
-                        WriteExpr(context, output, removeStmt.Variable);
+                        this.WriteExpr(context, output, removeStmt.Variable);
 
                         if (isMap || isSet)
                             context.Write(output, ").remove(");
                         else
                             context.Write(output, ").removeAt(");
 
-                        WriteExpr(context, output, removeStmt.Value);
+                        this.WriteExpr(context, output, removeStmt.Value);
                         context.WriteLine(output, ");");
                     }
                 );
@@ -1000,12 +1000,12 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
             }
             case AnnounceStmt announceStmt:
                 context.Write(output, $"{CompilationContext.SchedulerVar}.announce(");
-                WriteExpr(context, output, announceStmt.Event);
+                this.WriteExpr(context, output, announceStmt.Event);
                 context.Write(output, ", ");
                 if (announceStmt.Payload == null)
                     context.Write(output, "null");
                 else
-                    WriteExpr(context, output, announceStmt.Payload);
+                    this.WriteExpr(context, output, announceStmt.Payload);
                 context.WriteLine(output, ");");
                 break;
             case ReceiveSplitStmt splitStmt:
@@ -1219,7 +1219,7 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
         {
             var param = args.ElementAt(i);
             context.Write(output, ", ");
-            WriteExpr(context, output, param);
+            this.WriteExpr(context, output, param);
         }
 
         context.WriteLine(output, ");");
@@ -1259,7 +1259,7 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
         {
             var param = args.ElementAt(i);
             context.Write(output, ", ");
-            WriteExpr(context, output, param);
+            this.WriteExpr(context, output, param);
         }
 
         context.WriteLine(output, ");");
@@ -1302,7 +1302,7 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
                         var indexTemp = context.FreshTempVar();
 
                         context.Write(output, $"{GetPExType(indexType)} {indexTemp} = ");
-                        WriteExpr(context, output, indexExpr);
+                        this.WriteExpr(context, output, indexExpr);
                         context.WriteLine(output, ";");
 
                         context.Write(output, $"{GetPExType(elementType)} {elementTemp}");
@@ -1415,7 +1415,7 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
                         var indexTemp = context.FreshTempVar();
 
                         context.Write(output, $"{GetPExType(PrimitiveType.Int)} {indexTemp} = ");
-                        WriteExpr(context, output, seqAccessExpr.IndexExpr);
+                        this.WriteExpr(context, output, seqAccessExpr.IndexExpr);
                         context.WriteLine(output, ";");
 
                         context.Write(output, $"{GetPExType(elementType)} {elementTemp}");
@@ -1451,7 +1451,7 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
                         var indexTemp = context.FreshTempVar();
 
                         context.Write(output, $"{GetPExType(PrimitiveType.Int)} {indexTemp} = ");
-                        WriteExpr(context, output, setAccessExpr.IndexExpr);
+                        this.WriteExpr(context, output, setAccessExpr.IndexExpr);
                         context.WriteLine(output, ";");
 
                         context.Write(output, $"{GetPExType(elementType)} {elementTemp}");
@@ -1534,19 +1534,19 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
         return sb.ToString();
     }
 
-    protected override void WriteCloneExpr(CompilationContext context, StringWriter output, CloneExpr cloneExpr)
+    public void WriteCloneExpr(CompilationContext context, StringWriter output, CloneExpr cloneExpr)
     {
-        WriteExpr(context, output, cloneExpr.Term);
+        this.WriteExpr(context, output, cloneExpr.Term);
     }
 
-    protected override void WriteUnaryOpExpr(CompilationContext context, StringWriter output, UnaryOpExpr unaryOpExpr)
+    public void WriteUnaryOpExpr(CompilationContext context, StringWriter output, UnaryOpExpr unaryOpExpr)
     {
         context.Write(output, "(");
-        WriteExpr(context, output, unaryOpExpr.SubExpr);
+        this.WriteExpr(context, output, unaryOpExpr.SubExpr);
         context.Write(output, $").{UnOpToStr(unaryOpExpr.Operation)}()");
     }
 
-    protected override void WriteBinOpExpr(CompilationContext context, StringWriter output, BinOpExpr binOpExpr)
+    public void WriteBinOpExpr(CompilationContext context, StringWriter output, BinOpExpr binOpExpr)
     {
         var isEquality = binOpExpr.Operation == BinOpType.Eq || binOpExpr.Operation == BinOpType.Neq;
 
@@ -1557,9 +1557,9 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
                 context.Write(output, "isEqual(");
             else
                 context.Write(output, "notEqual(");
-            WriteExpr(context, output, binOpExpr.Lhs);
+            this.WriteExpr(context, output, binOpExpr.Lhs);
             context.Write(output, ", ");
-            WriteExpr(context, output, binOpExpr.Rhs);
+            this.WriteExpr(context, output, binOpExpr.Rhs);
             context.Write(output, ")");
             context.Write(output, ")");
         }
@@ -1576,42 +1576,42 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
             }
 
             context.Write(output, "(");
-            WriteExpr(context, output, binOpExpr.Lhs);
+            this.WriteExpr(context, output, binOpExpr.Lhs);
             context.Write(output, $").{BinOpToStr(binOpExpr.Operation)}(");
             if (binOpExpr.Rhs is NullLiteralExpr)
                 context.Write(output, $"{GetDefaultValue(binOpExpr.Lhs.Type)}");
             else
-                WriteExpr(context, output, binOpExpr.Rhs);
+                this.WriteExpr(context, output, binOpExpr.Rhs);
             context.Write(output, ")");
         }
     }
 
-    protected override void WriteBoolLiteralExpr(CompilationContext context, StringWriter output, BoolLiteralExpr boolLiteralExpr)
+    public void WriteBoolLiteralExpr(CompilationContext context, StringWriter output, BoolLiteralExpr boolLiteralExpr)
     {
         var unguarded = $"new {GetPExType(PrimitiveType.Bool)}" + $"({boolLiteralExpr.Value})".ToLower();
         context.Write(output, unguarded);
     }
 
-    protected override void WriteCastExpr(CompilationContext context, StringWriter output, CastExpr castExpr)
+    public void WriteCastExpr(CompilationContext context, StringWriter output, CastExpr castExpr)
     {
         if (castExpr.SubExpr is NullLiteralExpr)
             context.Write(output, GetDefaultValue(castExpr.Type));
         else
-            WriteExpr(context, output, castExpr.SubExpr);
+            this.WriteExpr(context, output, castExpr.SubExpr);
     }
 
-    protected override void WriteCoerceExpr(CompilationContext context, StringWriter output, CoerceExpr coerceExpr)
+    public void WriteCoerceExpr(CompilationContext context, StringWriter output, CoerceExpr coerceExpr)
     {
         switch (coerceExpr.Type.Canonicalize())
         {
             case PrimitiveType oldType when oldType.IsSameTypeAs(PrimitiveType.Float):
                 context.Write(output, "(");
-                WriteExpr(context, output, coerceExpr.SubExpr);
+                this.WriteExpr(context, output, coerceExpr.SubExpr);
                 context.Write(output, ").toFloat()");
                 break;
             case PrimitiveType oldType when oldType.IsSameTypeAs(PrimitiveType.Int):
                 context.Write(output, "(");
-                WriteExpr(context, output, coerceExpr.SubExpr);
+                this.WriteExpr(context, output, coerceExpr.SubExpr);
                 context.Write(output, ").toInt()");
                 break;
             default:
@@ -1620,85 +1620,85 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
         }
     }
 
-    protected override void WriteDefaultExpr(CompilationContext context, StringWriter output, DefaultExpr defaultExpr)
+    public void WriteDefaultExpr(CompilationContext context, StringWriter output, DefaultExpr defaultExpr)
     {
         context.Write(output, GetDefaultValue(defaultExpr.Type));
     }
 
-    protected override void WriteFloatLiteralExpr(CompilationContext context, StringWriter output, FloatLiteralExpr floatLiteralExpr)
+    public void WriteFloatLiteralExpr(CompilationContext context, StringWriter output, FloatLiteralExpr floatLiteralExpr)
     {
         var unguarded = $"new {GetPExType(PrimitiveType.Float)}({floatLiteralExpr.Value}f)";
         context.Write(output, unguarded);
     }
 
-    protected override void WriteIntLiteralExpr(CompilationContext context, StringWriter output, IntLiteralExpr intLiteralExpr)
+    public void WriteIntLiteralExpr(CompilationContext context, StringWriter output, IntLiteralExpr intLiteralExpr)
     {
         var unguarded = $"new {GetPExType(PrimitiveType.Int)}({intLiteralExpr.Value})";
         context.Write(output, unguarded);
     }
 
-    protected override void WriteKeysExpr(CompilationContext context, StringWriter output, KeysExpr keyExpr)
+    public void WriteKeysExpr(CompilationContext context, StringWriter output, KeysExpr keyExpr)
     {
-        WriteExpr(context, output, keyExpr.Expr);
+        this.WriteExpr(context, output, keyExpr.Expr);
         context.Write(output, ".getKeys()");
     }
 
-    protected override void WriteValuesExpr(CompilationContext context, StringWriter output, ValuesExpr valuesExpr)
+    public void WriteValuesExpr(CompilationContext context, StringWriter output, ValuesExpr valuesExpr)
     {
-        WriteExpr(context, output, valuesExpr.Expr);
+        this.WriteExpr(context, output, valuesExpr.Expr);
         context.Write(output, ".getValues()");
     }
 
-    protected override void WriteMapAccessExpr(CompilationContext context, StringWriter output, MapAccessExpr mapAccessExpr)
+    public void WriteMapAccessExpr(CompilationContext context, StringWriter output, MapAccessExpr mapAccessExpr)
     {
         context.Write(output, $"(({GetPExType(mapAccessExpr.MapExpr.Type)})");
-        WriteExpr(context, output, mapAccessExpr.MapExpr);
+        this.WriteExpr(context, output, mapAccessExpr.MapExpr);
         context.Write(output, ").get(");
-        WriteExpr(context, output, mapAccessExpr.IndexExpr);
+        this.WriteExpr(context, output, mapAccessExpr.IndexExpr);
         context.Write(output, ")");
     }
 
-    protected override void WriteSeqAccessExpr(CompilationContext context, StringWriter output, SeqAccessExpr seqAccessExpr)
+    public void WriteSeqAccessExpr(CompilationContext context, StringWriter output, SeqAccessExpr seqAccessExpr)
     {
         context.Write(output, $"(({GetPExType(seqAccessExpr.SeqExpr.Type)})");
-        WriteExpr(context, output, seqAccessExpr.SeqExpr);
+        this.WriteExpr(context, output, seqAccessExpr.SeqExpr);
         context.Write(output, ").get(");
-        WriteExpr(context, output, seqAccessExpr.IndexExpr);
+        this.WriteExpr(context, output, seqAccessExpr.IndexExpr);
         context.Write(output, ")");
     }
 
-    protected override void WriteSetAccessExpr(CompilationContext context, StringWriter output, SetAccessExpr setAccessExpr)
+    public void WriteSetAccessExpr(CompilationContext context, StringWriter output, SetAccessExpr setAccessExpr)
     {
         context.Write(output, $"(({GetPExType(setAccessExpr.SetExpr.Type)})");
-        WriteExpr(context, output, setAccessExpr.SetExpr);
+        this.WriteExpr(context, output, setAccessExpr.SetExpr);
         context.Write(output, ").get(");
-        WriteExpr(context, output, setAccessExpr.IndexExpr);
+        this.WriteExpr(context, output, setAccessExpr.IndexExpr);
         context.Write(output, ")");
     }
 
-    protected override void WriteNamedTupleAccessExpr(CompilationContext context, StringWriter output, NamedTupleAccessExpr namedTupleAccessExpr)
+    public void WriteNamedTupleAccessExpr(CompilationContext context, StringWriter output, NamedTupleAccessExpr namedTupleAccessExpr)
     {
         context.Write(output, $"(({GetPExType(namedTupleAccessExpr.Type)})(");
         context.Write(output, $"(({GetPExType(namedTupleAccessExpr.SubExpr.Type)})");
-        WriteExpr(context, output, namedTupleAccessExpr.SubExpr);
+        this.WriteExpr(context, output, namedTupleAccessExpr.SubExpr);
         context.Write(output, $").getField(\"{namedTupleAccessExpr.FieldName}\")))");
     }
 
-    protected override void WriteThisRefExpr(CompilationContext context, StringWriter output, ThisRefExpr expr)
+    public void WriteThisRefExpr(CompilationContext context, StringWriter output, ThisRefExpr expr)
     {
         context.Write(output, "new PMachineValue(this)");
     }
 
-    protected override void WriteTupleAccessExpr(CompilationContext context, StringWriter output, TupleAccessExpr tupleAccessExpr)
+    public void WriteTupleAccessExpr(CompilationContext context, StringWriter output, TupleAccessExpr tupleAccessExpr)
     {
         context.Write(output, $"({GetPExType(tupleAccessExpr.Type)})(");
         var tupleType = tupleAccessExpr.SubExpr.Type.Canonicalize() as TupleType;
         context.Write(output, $"(({GetPExType(tupleAccessExpr.SubExpr.Type)})");
-        WriteExpr(context, output, tupleAccessExpr.SubExpr);
+        this.WriteExpr(context, output, tupleAccessExpr.SubExpr);
         context.Write(output, $").getField({tupleAccessExpr.FieldNo}))");
     }
 
-    protected override void WriteNamedTupleExpr(CompilationContext context, StringWriter output, NamedTupleExpr namedTupleExpr)
+    public void WriteNamedTupleExpr(CompilationContext context, StringWriter output, NamedTupleExpr namedTupleExpr)
     {
         context.WriteLine(output, "new PNamedTuple(");
         var fields = (namedTupleExpr.Type.Canonicalize() as NamedTupleType).Fields;
@@ -1720,7 +1720,7 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
         {
             var field = namedTupleExpr.TupleFields[i];
             var castExpr = new CastExpr(field.SourceLocation, field, nttype.Types[i]);
-            WriteExpr(context, output, castExpr);
+            this.WriteExpr(context, output, castExpr);
             if (i + 1 != namedTupleExpr.TupleFields.Count)
                 context.Write(output, ", ");
         }
@@ -1730,7 +1730,7 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
         context.WriteLine(output, ")");
     }
 
-    protected override void WriteUnnamedTupleExpr(CompilationContext context, StringWriter output, UnnamedTupleExpr unnamedTupleExpr)
+    public void WriteUnnamedTupleExpr(CompilationContext context, StringWriter output, UnnamedTupleExpr unnamedTupleExpr)
     {
         context.Write(output, "new PTuple(");
         var ttype = (TupleType)unnamedTupleExpr.Type;
@@ -1738,7 +1738,7 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
         {
             var castExpr = new CastExpr(unnamedTupleExpr.SourceLocation, unnamedTupleExpr.TupleFields[i],
                 ttype.Types[i]);
-            WriteExpr(context, output, castExpr);
+            this.WriteExpr(context, output, castExpr);
             if (i + 1 != unnamedTupleExpr.TupleFields.Count)
                 context.Write(output, ", ");
         }
@@ -1746,31 +1746,31 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
         context.Write(output, ")");
     }
 
-    protected override void WriteEnumElemRefExpr(CompilationContext context, StringWriter output, EnumElemRefExpr enumElemRefExpr)
+    public void WriteEnumElemRefExpr(CompilationContext context, StringWriter output, EnumElemRefExpr enumElemRefExpr)
     {
         var unguarded =
             $"new {GetPExType(enumElemRefExpr.Type)}(\"{enumElemRefExpr.Type.OriginalRepresentation}\", \"{enumElemRefExpr.Value.Name}\", {enumElemRefExpr.Value.Value})";
         context.Write(output, unguarded);
     }
 
-    protected override void WriteEventRefExpr(CompilationContext context, StringWriter output, EventRefExpr eventRefExpr)
+    public void WriteEventRefExpr(CompilationContext context, StringWriter output, EventRefExpr eventRefExpr)
     {
         var unguarded = $"new {GetPExType(PrimitiveType.Event)}({context.GetNameForDecl(eventRefExpr.Value)})";
         context.Write(output, unguarded);
     }
 
-    protected override void WriteVariableAccessExpr(CompilationContext context, StringWriter output, VariableAccessExpr variableAccessExpr)
+    public void WriteVariableAccessExpr(CompilationContext context, StringWriter output, VariableAccessExpr variableAccessExpr)
     {
         context.Write(output, $"{GetGlobalParamAndLocalVariableName(variableAccessExpr.Variable)}");
     }
 
-    protected override void WriteFunCallExpr(CompilationContext context, StringWriter output, FunCallExpr expr)
+    public void WriteFunCallExpr(CompilationContext context, StringWriter output, FunCallExpr expr)
     {
         throw new InvalidOperationException(
             "Compilation of call expressions should be handled as part of assignment statements");
     }
 
-    protected override void WriteContainsExpr(CompilationContext context, StringWriter output, ContainsExpr containsExpr)
+    public void WriteContainsExpr(CompilationContext context, StringWriter output, ContainsExpr containsExpr)
     {
         PLanguageType elementType;
         var isMap = PLanguageType.TypeIsOfKind(containsExpr.Collection.Type, TypeKind.Map);
@@ -1782,23 +1782,23 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
         else
             elementType = ((SequenceType)containsExpr.Collection.Type.Canonicalize()).ElementType;
 
-        WriteExpr(context, output, containsExpr.Collection);
+        this.WriteExpr(context, output, containsExpr.Collection);
         context.Write(output, ".contains(");
-        WriteExpr(context, output, containsExpr.Item);
+        this.WriteExpr(context, output, containsExpr.Item);
         context.Write(output, ")");
     }
 
-    protected override void WriteCtorExpr(CompilationContext context, StringWriter output, CtorExpr ctorExpr)
+    public void WriteCtorExpr(CompilationContext context, StringWriter output, CtorExpr ctorExpr)
     {
         WriteCtorExpr(context, output, ctorExpr.Interface, ctorExpr.Arguments);
     }
 
-    protected override void WriteNondetExpr(CompilationContext context, StringWriter output, NondetExpr expr)
+    public void WriteNondetExpr(CompilationContext context, StringWriter output, NondetExpr expr)
     {
         WriteRandomBool(context, output, expr);
     }
 
-    protected override void WriteFairNondetExpr(CompilationContext context, StringWriter output, FairNondetExpr expr)
+    public void WriteFairNondetExpr(CompilationContext context, StringWriter output, FairNondetExpr expr)
     {
         WriteRandomBool(context, output, expr);
     }
@@ -1810,7 +1810,7 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
         context.Write(output, $"{CompilationContext.SchedulerVar}.getRandomBool({loc})");
     }
 
-    protected override void WriteChooseExpr(CompilationContext context, StringWriter output, ChooseExpr chooseExpr)
+    public void WriteChooseExpr(CompilationContext context, StringWriter output, ChooseExpr chooseExpr)
     {
         var loc = $"\"{context.LocationResolver.GetLocation(chooseExpr.SourceLocation).ToString()
             .Replace(@"\", @"\\")}\"";
@@ -1825,25 +1825,25 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
         {
             case PrimitiveType primitiveType when primitiveType.IsSameTypeAs(PrimitiveType.Int):
                 context.Write(output, $"{CompilationContext.SchedulerVar}.getRandomInt({loc}, ");
-                WriteExpr(context, output, chooseExpr.SubExpr);
+                this.WriteExpr(context, output, chooseExpr.SubExpr);
                 context.Write(output, ")");
                 break;
             case SequenceType sequenceType:
                 context.Write(output,
                     $"({GetPExType(sequenceType.ElementType)}) {CompilationContext.SchedulerVar}.getRandomEntry({loc}, ");
-                WriteExpr(context, output, chooseExpr.SubExpr);
+                this.WriteExpr(context, output, chooseExpr.SubExpr);
                 context.Write(output, ")");
                 break;
             case SetType setType:
                 context.Write(output,
                     $"({GetPExType(setType.ElementType)}) {CompilationContext.SchedulerVar}.getRandomEntry({loc}, ");
-                WriteExpr(context, output, chooseExpr.SubExpr);
+                this.WriteExpr(context, output, chooseExpr.SubExpr);
                 context.Write(output, ")");
                 break;
             case MapType mapType:
                 context.Write(output,
                     $"({GetPExType(mapType.KeyType)}) {CompilationContext.SchedulerVar}.getRandomEntry({loc}, ");
-                WriteExpr(context, output, chooseExpr.SubExpr);
+                this.WriteExpr(context, output, chooseExpr.SubExpr);
                 context.Write(output, ")");
                 break;
             default:
@@ -1852,13 +1852,13 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
         }
     }
 
-    protected override void WriteSizeofExpr(CompilationContext context, StringWriter output, SizeofExpr sizeOfExpr)
+    public void WriteSizeofExpr(CompilationContext context, StringWriter output, SizeofExpr sizeOfExpr)
     {
-        WriteExpr(context, output, sizeOfExpr.Expr);
+        this.WriteExpr(context, output, sizeOfExpr.Expr);
         context.Write(output, ".size()");
     }
 
-    protected override void WriteStringExpr(CompilationContext context, StringWriter output, StringExpr stringExpr)
+    public void WriteStringExpr(CompilationContext context, StringWriter output, StringExpr stringExpr)
     {
         var baseString = stringExpr.BaseString;
         if (stringExpr.Args.Count != 0) baseString = TransformPrintMessage(baseString);
@@ -1866,13 +1866,13 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
         foreach (var arg in stringExpr.Args)
         {
             context.Write(output, ", ");
-            WriteExpr(context, output, arg);
+            this.WriteExpr(context, output, arg);
         }
 
         context.Write(output, ")");
     }
 
-    protected override void WriteNullLiteralExpr(CompilationContext context, StringWriter output, NullLiteralExpr expr)
+    public void WriteNullLiteralExpr(CompilationContext context, StringWriter output, NullLiteralExpr expr)
     {
         context.Write(output, "null");
     }
@@ -1890,14 +1890,14 @@ internal class PExCodeGenerator : ExpressionGenerator<CompilationContext>, ICode
         {
             Debug.Assert(ctorArguments.Count == 1);
             context.Write(output, ", ");
-            WriteExpr(context, output, ctorArguments[0]);
+            this.WriteExpr(context, output, ctorArguments[0]);
         }
         else if (ctorArguments.Count > 1)
         {
             context.Write(output, ", new PTuple (");
             for (var i = 0; i < ctorArguments.Count; i++)
             {
-                WriteExpr(context, output, ctorArguments[i]);
+                this.WriteExpr(context, output, ctorArguments[i]);
                 if (i != ctorArguments.Count - 1) context.Write(output, ", ");
             }
 
