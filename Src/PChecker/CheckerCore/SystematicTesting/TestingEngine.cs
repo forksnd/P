@@ -398,7 +398,6 @@ namespace PChecker.SystematicTesting
                 _checkerConfiguration.SchedulingStrategy is "pct" ||
                 _checkerConfiguration.SchedulingStrategy is "pos" ||
                 _checkerConfiguration.SchedulingStrategy is "feedbackpct" ||
-                _checkerConfiguration.SchedulingStrategy is "feedbackpctcp" ||
                 _checkerConfiguration.SchedulingStrategy is "feedbackpos" ||
                 _checkerConfiguration.SchedulingStrategy is "fairpct" ||
                 _checkerConfiguration.SchedulingStrategy is "probabilistic" ||
@@ -510,7 +509,6 @@ namespace PChecker.SystematicTesting
         /// </summary>
         private void RunNextIteration(int schedule)
         {
-            BehavioralObserver.NextIter();
             if (!IsReplayModeEnabled && ShouldPrintIteration(schedule + 1))
             {
                 Logger.WriteLine($"..... Schedule #{schedule + 1}");
@@ -925,8 +923,7 @@ namespace PChecker.SystematicTesting
             var coverageInfo = runtime.GetCoverageInfo();
             report.CoverageInfo.Merge(coverageInfo);
             TestReport.Merge(report);
-            var timelineHash = timelineObserver.GetTimelineHash();
-            TestReport.ExploredTimelines.Add(timelineObserver.GetTimelineHash());
+            TestReport.ExploredTimelines.Add(timelineObserver.GetAbstractTimeline());
             // Also save the graph snapshot of the last iteration, if there is one.
             Graph = coverageInfo.CoverageGraph;
             // Also save the graph snapshot of the last schedule, if there is one.

@@ -22,7 +22,7 @@ internal class FeedbackGuidedStrategy : IFeedbackGuidedStrategy
 
     protected int ScheduledSteps;
 
-    private readonly HashSet<int> _visitedTimelines = new();
+    private readonly HashSet<string> _visitedTimelines = new();
 
     private List<GeneratorRecord> _savedGenerators = new ();
     private int _pendingMutations;
@@ -30,7 +30,7 @@ internal class FeedbackGuidedStrategy : IFeedbackGuidedStrategy
     private HashSet<GeneratorRecord> _visitedGenerators = new HashSet<GeneratorRecord>();
     private GeneratorRecord _currentParent;
 
-    private System.Random _rnd = new System.Random();
+    private readonly System.Random _rnd;
 
 
 
@@ -40,6 +40,9 @@ internal class FeedbackGuidedStrategy : IFeedbackGuidedStrategy
     public FeedbackGuidedStrategy(CheckerConfiguration checkerConfiguration, ControlledRandom inputGenerator, IScheduler scheduler)
     {
         _maxScheduledSteps = checkerConfiguration.MaxUnfairSchedulingSteps;
+        // Seed the explore/exploit RNG from the configured seed so feedback-guided
+        // runs are reproducible under a fixed --seed (mirrors ControlledRandom).
+        _rnd = new System.Random((int?)checkerConfiguration.RandomGeneratorSeed ?? Guid.NewGuid().GetHashCode());
         Generator = new StrategyGenerator(inputGenerator, scheduler);
     }
 
@@ -110,7 +113,7 @@ internal class FeedbackGuidedStrategy : IFeedbackGuidedStrategy
         ScheduledSteps = 0;
     }
 
-    private int ComputeDiversity(int timeline, List<int> hash)
+    private int ComputeDiversity(string timeline, List<int> hash)
     {
         if (!_visitedTimelines.Add(timeline))
         {
@@ -147,10 +150,10 @@ internal class FeedbackGuidedStrategy : IFeedbackGuidedStrategy
     /// </summary>
     public virtual void ObserveRunningResults(TimelineObserver timelineObserver)
     {
-        var timelineHash = timelineObserver.GetTimelineHash();
+        var timelineId = timelineObserver.GetAbstractTimeline();
         var timelineMinhash = timelineObserver.GetTimelineMinhash();
 
-        int diversityScore = ComputeDiversity(timelineHash, timelineMinhash);
+        int diversityScore = ComputeDiversity(timelineId, timelineMinhash);
 
         if (diversityScore == 0)
         {
