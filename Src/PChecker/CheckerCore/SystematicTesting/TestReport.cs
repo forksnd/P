@@ -3,6 +3,7 @@
 
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.Serialization;
 using System.Text;
 using PChecker.Coverage;
@@ -107,6 +108,31 @@ namespace PChecker.SystematicTesting
         [DataMember]
         public HashSet<string> ExploredTimelines = new();
 
+        /// <summary>
+        /// Scenario coverage: per scenario name, the number of iterations in which it was
+        /// triggered (its coverage monitor reached an accepting state at least once).
+        /// </summary>
+        [DataMember]
+        public Dictionary<string, int> ScenarioTriggerCounts = new();
+
+        /// <summary>
+        /// Scenario coverage: per scenario name, the set of distinct timelines that satisfied it.
+        /// Counts unique satisfying timelines (the paper's notion of scenario coverage).
+        /// </summary>
+        [DataMember]
+        public Dictionary<string, HashSet<string>> ScenarioSatisfyingTimelines = new();
+
+        /// <summary>
+        /// Partial scenario coverage: per scenario, the most distinct states any single
+        /// schedule reached (how close an unsatisfied scenario got).
+        /// </summary>
+        [DataMember]
+        public Dictionary<string, int> ScenarioMaxStatesReached = new();
+
+        /// <summary>Partial scenario coverage: per scenario, its total number of states.</summary>
+        [DataMember]
+        public Dictionary<string, int> ScenarioTotalStates = new();
+
 
         /// <summary>
         /// Lock for the test report.
@@ -140,6 +166,63 @@ namespace PChecker.SystematicTesting
         }
 
         /// <summary>
+        /// Ensures <paramref name="scenario"/> appears in the coverage report even if it was
+        /// never triggered (0-coverage scenarios are the important gaps to surface).
+        /// </summary>
+        public void EnsureScenarioTracked(string scenario)
+        {
+            lock (Lock)
+            {
+                if (!ScenarioTriggerCounts.ContainsKey(scenario))
+                {
+                    ScenarioTriggerCounts[scenario] = 0;
+                }
+                if (!ScenarioSatisfyingTimelines.ContainsKey(scenario))
+                {
+                    ScenarioSatisfyingTimelines[scenario] = new HashSet<string>();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Records partial progress for <paramref name="scenario"/>: the most distinct states
+        /// reached (<paramref name="statesReached"/>) out of <paramref name="totalStates"/>.
+        /// </summary>
+        public void RecordScenarioProgress(string scenario, int statesReached, int totalStates)
+        {
+            lock (Lock)
+            {
+                if (!ScenarioMaxStatesReached.TryGetValue(scenario, out var best) || statesReached > best)
+                {
+                    ScenarioMaxStatesReached[scenario] = statesReached;
+                }
+                if (totalStates > 0)
+                {
+                    ScenarioTotalStates[scenario] = totalStates;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Records that <paramref name="scenario"/> was satisfied by a schedule whose
+        /// abstract timeline is <paramref name="timeline"/> (used for scenario coverage).
+        /// </summary>
+        public void RecordScenarioSatisfied(string scenario, string timeline)
+        {
+            lock (Lock)
+            {
+                ScenarioTriggerCounts.TryGetValue(scenario, out var count);
+                ScenarioTriggerCounts[scenario] = count + 1;
+                if (!ScenarioSatisfyingTimelines.TryGetValue(scenario, out var timelines))
+                {
+                    timelines = new HashSet<string>();
+                    ScenarioSatisfyingTimelines[scenario] = timelines;
+                }
+                timelines.Add(timeline);
+            }
+        }
+
+        /// <summary>
         /// Merges the information from the specified test report.
         /// </summary>
         /// <returns>True if merged successfully.</returns>
@@ -155,6 +238,33 @@ namespace PChecker.SystematicTesting
             {
                 CoverageInfo.Merge(testReport.CoverageInfo);
                 ExploredTimelines.UnionWith(testReport.ExploredTimelines);
+
+                // Scenario coverage: sum trigger counts and union satisfying timelines.
+                foreach (var kv in testReport.ScenarioTriggerCounts)
+                {
+                    ScenarioTriggerCounts.TryGetValue(kv.Key, out var count);
+                    ScenarioTriggerCounts[kv.Key] = count + kv.Value;
+                }
+                foreach (var kv in testReport.ScenarioSatisfyingTimelines)
+                {
+                    if (!ScenarioSatisfyingTimelines.TryGetValue(kv.Key, out var timelines))
+                    {
+                        timelines = new HashSet<string>();
+                        ScenarioSatisfyingTimelines[kv.Key] = timelines;
+                    }
+                    timelines.UnionWith(kv.Value);
+                }
+                foreach (var kv in testReport.ScenarioMaxStatesReached)
+                {
+                    if (!ScenarioMaxStatesReached.TryGetValue(kv.Key, out var best) || kv.Value > best)
+                    {
+                        ScenarioMaxStatesReached[kv.Key] = kv.Value;
+                    }
+                }
+                foreach (var kv in testReport.ScenarioTotalStates)
+                {
+                    ScenarioTotalStates[kv.Key] = kv.Value;
+                }
 
                 NumOfFoundBugs += testReport.NumOfFoundBugs;
 
@@ -247,6 +357,43 @@ namespace PChecker.SystematicTesting
                 prefix.Equals("...") ? "....." : prefix,
                 ExploredTimelines.Count,
                 ExploredTimelines.Count == 1 ? string.Empty : "s");
+
+            // Scenario coverage: a scannable summary (how many scenarios were covered), then
+            // the covered scenarios, then the coverage gaps (never satisfied) called out last.
+            if (ScenarioTriggerCounts.Count > 0)
+            {
+                var pfx = prefix.Equals("...") ? "....." : prefix;
+                var names = ScenarioTriggerCounts.Keys.OrderBy(k => k).ToList();
+                var covered = names.Where(s => ScenarioTriggerCounts[s] > 0).ToList();
+                var gaps = names.Where(s => ScenarioTriggerCounts[s] == 0).ToList();
+
+                report.AppendLine();
+                report.AppendFormat("{0} Scenario coverage: {1}/{2} scenarios covered{3}",
+                    pfx, covered.Count, names.Count,
+                    gaps.Count > 0 ? $" ({gaps.Count} gap{(gaps.Count == 1 ? string.Empty : "s")})" : string.Empty);
+
+                foreach (var scenario in covered)
+                {
+                    var triggered = ScenarioTriggerCounts[scenario];
+                    var uniqueTimelines = ScenarioSatisfyingTimelines.TryGetValue(scenario, out var tls) ? tls.Count : 0;
+                    report.AppendLine();
+                    report.AppendFormat(
+                        "{0}   [covered] {1}: triggered in {2} schedule{3}, {4} unique satisfying timeline{5}",
+                        pfx, scenario, triggered, triggered == 1 ? string.Empty : "s",
+                        uniqueTimelines, uniqueTimelines == 1 ? string.Empty : "s");
+                }
+                // Coverage gaps: scenarios never satisfied. Show how close exploration got.
+                foreach (var scenario in gaps)
+                {
+                    report.AppendLine();
+                    report.AppendFormat("{0}   [  GAP  ] {1}: not covered", pfx, scenario);
+                    if (ScenarioTotalStates.TryGetValue(scenario, out var total) && total > 0)
+                    {
+                        var reached = ScenarioMaxStatesReached.TryGetValue(scenario, out var r) ? r : 0;
+                        report.AppendFormat(" (best partial progress: {0}/{1} states)", reached, total);
+                    }
+                }
+            }
 
             if (totalExploredSchedules > 0 &&
                 NumOfFoundBugs > 0)

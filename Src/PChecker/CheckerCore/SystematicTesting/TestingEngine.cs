@@ -523,7 +523,13 @@ namespace PChecker.SystematicTesting
             // Runtime used to serialize and test the program in this schedule.
             ControlledRuntime runtime = null;
 
-            TimelineObserver timelineObserver = new TimelineObserver();
+            TimelineObserver timelineObserver = new TimelineObserver(
+                _checkerConfiguration.TimelineRepresentation,
+                _checkerConfiguration.TimelineKGram,
+                _checkerConfiguration.TimelinePayload);
+
+            // Observes which scenario (coverage) monitors are satisfied this iteration.
+            ScenarioComplianceObserver scenarioObserver = new ScenarioComplianceObserver();
 
             // Logger used to intercept the program output if no custom logger
             // is installed and if verbosity is turned off.
@@ -539,6 +545,7 @@ namespace PChecker.SystematicTesting
                 runtime = new ControlledRuntime(_checkerConfiguration, Strategy);
 
                 runtime.RegisterLog(timelineObserver);
+                runtime.RegisterLog(scenarioObserver);
                 RegisterObservers(runtime);
 
 
@@ -571,7 +578,11 @@ namespace PChecker.SystematicTesting
 
                 if (Strategy is IFeedbackGuidedStrategy strategy)
                 {
-                    strategy.ObserveRunningResults(timelineObserver);
+                    // The strategy computes the coverage-novelty steering signal itself, but only
+                    // for generators it keeps (after its timeline-diversity gate), so a discarded
+                    // schedule never consumes a scenario's novelty. Pass this run's raw progress.
+                    strategy.ObserveRunningResults(timelineObserver,
+                        scenarioObserver.ReachedSnapshot(), scenarioObserver.SatisfiedScenarios);
                 }
 
                 // Checks that no monitor is in a hot state at termination. Only
@@ -595,6 +606,24 @@ namespace PChecker.SystematicTesting
                 runtime.LogWriter.LogCompletion();
 
                 GatherTestingStatistics(runtime, timelineObserver);
+
+                // Record scenario coverage: track every declared scenario (so uncovered
+                // ones are reported too), then count any satisfied this iteration, keyed
+                // by this schedule's abstract timeline.
+                foreach (var scenario in scenarioObserver.AllScenarioNames)
+                {
+                    TestReport.EnsureScenarioTracked(scenario);
+                    TestReport.RecordScenarioProgress(
+                        scenario, scenarioObserver.StatesReached(scenario), scenarioObserver.TotalStates(scenario));
+                }
+                if (scenarioObserver.SatisfiedScenarios.Count > 0)
+                {
+                    var scenarioTimeline = timelineObserver.GetAbstractTimeline();
+                    foreach (var scenario in scenarioObserver.SatisfiedScenarios)
+                    {
+                        TestReport.RecordScenarioSatisfied(scenario, scenarioTimeline);
+                    }
+                }
 
                 if (!IsReplayModeEnabled && TestReport.NumOfFoundBugs > 0)
                 {

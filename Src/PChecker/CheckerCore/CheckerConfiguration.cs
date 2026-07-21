@@ -154,6 +154,27 @@ namespace PChecker
         public int StrategyBound { get; set; }
 
         /// <summary>
+        /// How the feedback-guided search represents a schedule's "timeline" (the diversity
+        /// signal): "pairwise" (default, local event-type pairs), "kgram" (local k-grams),
+        /// "causal" (cross-machine happens-before via vector clocks), or "hybrid".
+        /// </summary>
+        [DataMember]
+        public string TimelineRepresentation { get; set; }
+
+        /// <summary>
+        /// Gram length for the "kgram"/"hybrid" timeline representations.
+        /// </summary>
+        [DataMember]
+        public int TimelineKGram { get; set; }
+
+        /// <summary>
+        /// If enabled, timeline event labels are enriched with a stable hash of the event
+        /// payload (so deliveries differing only by payload value are not conflated).
+        /// </summary>
+        [DataMember]
+        public bool TimelinePayload { get; set; }
+
+        /// <summary>
         /// If this option is enabled, liveness checking is enabled during bug-finding.
         /// </summary>
         [DataMember]
@@ -313,6 +334,9 @@ namespace PChecker
             TestingProcessId = 0;
             ConsiderDepthBoundHitAsBug = false;
             StrategyBound = 0;
+            TimelineRepresentation = "pairwise";
+            TimelineKGram = 3;
+            TimelinePayload = false;
 
             IsLivenessCheckingEnabled = true;
             LivenessTemperatureThreshold = 0;
@@ -523,9 +547,18 @@ namespace PChecker
         /// </summary>
         public void SetOutputDirectory()
         {
+            // Group output by test case so each test case gets its OWN rotated history
+            // (PCheckerOutput/<testCase>/<Mode>/...). Test cases no longer clobber each
+            // other's history, concurrent runs of different test cases don't race on a shared
+            // directory, and "the latest run of test case X" is unambiguous (the non-numbered
+            // <Mode>/ dir). With no test case (a single anonymous test) the layout is unchanged.
+            var suffix = string.IsNullOrEmpty(TestCaseName)
+                ? Mode.ToString()
+                : SanitizePathSegment(TestCaseName) + Path.DirectorySeparatorChar + Mode.ToString();
+
             // Do not create the output directory yet if we have to scroll back the history first.
             OutputDirectory = Reporter.GetOutputDirectory(OutputPath, AssemblyToBeAnalyzed,
-                Mode.ToString(), createDir: false);
+                suffix, createDir: false);
 
             // The MaxHistory previous results are kept under the directory name with a suffix scrolling back from 0 to 9 (oldest).
             const int MaxHistory = 10;
@@ -557,6 +590,24 @@ namespace PChecker
 
             // Now create the new directory.
             Directory.CreateDirectory(OutputDirectory);
+        }
+
+        /// <summary>
+        /// Makes a test-case name safe to use as a single path segment (identifiers and
+        /// parameterized names are already close; this just neutralizes any stray separators).
+        /// </summary>
+        private static string SanitizePathSegment(string name)
+        {
+            var chars = name.ToCharArray();
+            for (var i = 0; i < chars.Length; i++)
+            {
+                var c = chars[i];
+                if (!(char.IsLetterOrDigit(c) || c == '.' || c == '-' || c == '_'))
+                {
+                    chars[i] = '_';
+                }
+            }
+            return new string(chars);
         }
     }
 #pragma warning restore CA1724 // Type names should not match namespaces
