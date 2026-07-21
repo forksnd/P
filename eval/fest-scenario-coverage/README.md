@@ -55,3 +55,30 @@ P merge-scenario-coverage /tmp/CS/merge
 The full multi-model / multi-strategy / multi-seed harness used for
 `Fest-eval-report.md` is a standalone Python script (kept out of the repo);
 the commands above reproduce any single data point.
+
+## Per-run artifact format (`*_scenario_coverage.json`)
+
+Each `p check` writes one artifact per test case (versioned, camelCase JSON):
+
+```json
+{
+  "version": 1,
+  "testCase": "tcSingleClient",
+  "scenarios": [
+    { "name": "WithdrawThenResponse",
+      "satisfied": true,                 // accepting (cold) state reached in >=1 schedule
+      "satisfyingSchedules": 99,         // # schedules that reached the accepting state
+      "distinctSatisfyingTimelines": 4,  // # distinct abstract timelines among those
+      "maxStatesVisited": 3,             // furthest partial progress (distinct monitor states)
+      "monitorStates": 3 },              // total states declared in the scenario monitor
+    { "name": "ImpossibleRespFirst",
+      "satisfied": false, "satisfyingSchedules": 0, "distinctSatisfyingTimelines": 0,
+      "maxStatesVisited": 2, "monitorStates": 4 }   // a coverage gap: reached 2 of 4 states
+  ]
+}
+```
+
+A scenario is **satisfied** iff its P monitor entered a **cold (accepting)** state; that is
+detected live and surfaced as `satisfied` / `satisfyingSchedules`. `maxStatesVisited /
+monitorStates` is a separate partial-progress proxy (how far an unsatisfied scenario got).
+`p merge-scenario-coverage` aggregates these across test cases (latest run per test case).

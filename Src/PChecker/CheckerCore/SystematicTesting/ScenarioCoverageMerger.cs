@@ -17,15 +17,29 @@ namespace PChecker.SystematicTesting
     /// </summary>
     public class ScenarioCoverageEntry
     {
+        /// <summary>Scenario (P monitor) name.</summary>
         public string Name { get; set; }
-        public int Triggered { get; set; }
-        public int UniqueTimelines { get; set; }
-        public int MaxStatesReached { get; set; }
-        public int TotalStates { get; set; }
+
+        /// <summary>True iff the scenario's accepting (cold) state was reached in at least one schedule.</summary>
+        public bool Satisfied { get; set; }
+
+        /// <summary>Number of schedules that reached the accepting state (i.e. satisfied the scenario).</summary>
+        public int SatisfyingSchedules { get; set; }
+
+        /// <summary>Number of distinct abstract timelines among the satisfying schedules.</summary>
+        public int DistinctSatisfyingTimelines { get; set; }
+
+        /// <summary>Furthest partial progress: the most distinct monitor states any single schedule visited.</summary>
+        public int MaxStatesVisited { get; set; }
+
+        /// <summary>Total number of states declared in the scenario monitor.</summary>
+        public int MonitorStates { get; set; }
     }
 
     public class ScenarioCoverageArtifact
     {
+        /// <summary>Artifact schema version, so the merger can detect/handle format changes.</summary>
+        public int Version { get; set; } = ScenarioCoverageMerger.SchemaVersion;
         public string TestCase { get; set; }
         public List<ScenarioCoverageEntry> Scenarios { get; set; } = new();
     }
@@ -36,10 +50,16 @@ namespace PChecker.SystematicTesting
     /// </summary>
     public static class ScenarioCoverageMerger
     {
+        /// <summary>Current artifact schema version (bump on any breaking field change).</summary>
+        public const int SchemaVersion = 1;
+
         /// <summary>Suffix identifying a per-run scenario-coverage artifact.</summary>
         public const string FileSuffix = "_scenario_coverage.json";
 
-        private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+        // camelCase keys (satisfied, satisfyingSchedules, ...); the same options are used for
+        // both serialize and deserialize so the artifact round-trips.
+        private static readonly JsonSerializerOptions JsonOptions =
+            new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
         /// <summary>Builds the artifact for a single completed test case from its report.</summary>
         public static ScenarioCoverageArtifact FromReport(TestReport report, string testCaseName)
@@ -47,13 +67,15 @@ namespace PChecker.SystematicTesting
             var artifact = new ScenarioCoverageArtifact { TestCase = testCaseName };
             foreach (var scenario in report.ScenarioTriggerCounts.Keys.OrderBy(k => k))
             {
+                var satisfyingSchedules = report.ScenarioTriggerCounts[scenario];
                 artifact.Scenarios.Add(new ScenarioCoverageEntry
                 {
                     Name = scenario,
-                    Triggered = report.ScenarioTriggerCounts[scenario],
-                    UniqueTimelines = report.ScenarioSatisfyingTimelines.TryGetValue(scenario, out var tls) ? tls.Count : 0,
-                    MaxStatesReached = report.ScenarioMaxStatesReached.TryGetValue(scenario, out var r) ? r : 0,
-                    TotalStates = report.ScenarioTotalStates.TryGetValue(scenario, out var t) ? t : 0,
+                    Satisfied = satisfyingSchedules > 0,
+                    SatisfyingSchedules = satisfyingSchedules,
+                    DistinctSatisfyingTimelines = report.ScenarioSatisfyingTimelines.TryGetValue(scenario, out var tls) ? tls.Count : 0,
+                    MaxStatesVisited = report.ScenarioMaxStatesReached.TryGetValue(scenario, out var r) ? r : 0,
+                    MonitorStates = report.ScenarioTotalStates.TryGetValue(scenario, out var t) ? t : 0,
                 });
             }
             return artifact;
@@ -86,7 +108,7 @@ namespace PChecker.SystematicTesting
             {
                 try
                 {
-                    var a = JsonSerializer.Deserialize<ScenarioCoverageArtifact>(File.ReadAllText(file));
+                    var a = JsonSerializer.Deserialize<ScenarioCoverageArtifact>(File.ReadAllText(file), JsonOptions);
                     if (a == null) continue;
                     var when = File.GetLastWriteTimeUtc(file);
                     var key = a.TestCase ?? string.Empty;
@@ -123,10 +145,10 @@ namespace PChecker.SystematicTesting
                 var tcName = string.IsNullOrEmpty(artifact.TestCase) ? "(default)" : artifact.TestCase;
                 foreach (var s in artifact.Scenarios)
                 {
-                    triggered[s.Name] = triggered.GetValueOrDefault(s.Name) + s.Triggered;
-                    uniqueTimelines[s.Name] = uniqueTimelines.GetValueOrDefault(s.Name) + s.UniqueTimelines;
+                    triggered[s.Name] = triggered.GetValueOrDefault(s.Name) + s.SatisfyingSchedules;
+                    uniqueTimelines[s.Name] = uniqueTimelines.GetValueOrDefault(s.Name) + s.DistinctSatisfyingTimelines;
                     testCasesTotal[s.Name] = testCasesTotal.GetValueOrDefault(s.Name) + 1;
-                    if (s.Triggered > 0)
+                    if (s.Satisfied)
                     {
                         if (!coveringCases.TryGetValue(s.Name, out var lst))
                         {
@@ -135,8 +157,8 @@ namespace PChecker.SystematicTesting
                         }
                         lst.Add(tcName);
                     }
-                    if (s.MaxStatesReached > bestReached.GetValueOrDefault(s.Name)) bestReached[s.Name] = s.MaxStatesReached;
-                    if (s.TotalStates > 0) totalStates[s.Name] = s.TotalStates;
+                    if (s.MaxStatesVisited > bestReached.GetValueOrDefault(s.Name)) bestReached[s.Name] = s.MaxStatesVisited;
+                    if (s.MonitorStates > 0) totalStates[s.Name] = s.MonitorStates;
                 }
             }
 

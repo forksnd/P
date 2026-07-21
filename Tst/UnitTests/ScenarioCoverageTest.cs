@@ -142,8 +142,8 @@ namespace UnitTests
                 TestCase = "tc1",
                 Scenarios = new()
                 {
-                    new ScenarioCoverageEntry { Name = "S", Triggered = 5, UniqueTimelines = 2, MaxStatesReached = 3, TotalStates = 3 },
-                    new ScenarioCoverageEntry { Name = "Gap", Triggered = 0, UniqueTimelines = 0, MaxStatesReached = 1, TotalStates = 4 },
+                    new ScenarioCoverageEntry { Name = "S", Satisfied = true, SatisfyingSchedules = 5, DistinctSatisfyingTimelines = 2, MaxStatesVisited = 3, MonitorStates = 3 },
+                    new ScenarioCoverageEntry { Name = "Gap", Satisfied = false, SatisfyingSchedules = 0, DistinctSatisfyingTimelines = 0, MaxStatesVisited = 1, MonitorStates = 4 },
                 }
             };
             var tc2 = new ScenarioCoverageArtifact
@@ -151,8 +151,8 @@ namespace UnitTests
                 TestCase = "tc2",
                 Scenarios = new()
                 {
-                    new ScenarioCoverageEntry { Name = "S", Triggered = 3, UniqueTimelines = 1, MaxStatesReached = 3, TotalStates = 3 },
-                    new ScenarioCoverageEntry { Name = "Gap", Triggered = 0, UniqueTimelines = 0, MaxStatesReached = 2, TotalStates = 4 },
+                    new ScenarioCoverageEntry { Name = "S", Satisfied = true, SatisfyingSchedules = 3, DistinctSatisfyingTimelines = 1, MaxStatesVisited = 3, MonitorStates = 3 },
+                    new ScenarioCoverageEntry { Name = "Gap", Satisfied = false, SatisfyingSchedules = 0, DistinctSatisfyingTimelines = 0, MaxStatesVisited = 2, MonitorStates = 4 },
                 }
             };
 
@@ -334,6 +334,41 @@ namespace UnitTests
             finally
             {
                 Directory.Delete(root, true);
+            }
+        }
+
+        [NUnit.Framework.Test]
+        public void Artifact_UsesClearVersionedSchema()
+        {
+            var report = NewReport();
+            report.RecordScenarioSatisfied("Covered", "<t1>");
+            report.EnsureScenarioTracked("Gap");
+            report.RecordScenarioProgress("Gap", 1, 3);
+
+            var dir = Path.Combine(Path.GetTempPath(), "scencov_fmt_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var path = Path.Combine(dir, "A" + ScenarioCoverageMerger.FileSuffix);
+                ScenarioCoverageMerger.Write(report, "tcX", path);
+                var json = File.ReadAllText(path);
+
+                // Versioned, self-describing, camelCase; satisfaction is explicit.
+                StringAssert.Contains("\"version\": 1", json);
+                StringAssert.Contains("\"testCase\": \"tcX\"", json);
+                StringAssert.Contains("\"satisfied\": true", json);   // Covered
+                StringAssert.Contains("\"satisfied\": false", json);  // Gap
+                StringAssert.Contains("\"satisfyingSchedules\": 1", json);
+                StringAssert.Contains("\"distinctSatisfyingTimelines\": 1", json);
+                StringAssert.Contains("\"maxStatesVisited\"", json);
+                StringAssert.Contains("\"monitorStates\": 3", json);  // Gap's total states
+
+                // And it round-trips back through the merger.
+                StringAssert.Contains("Covered", ScenarioCoverageMerger.MergeDirectory(dir));
+            }
+            finally
+            {
+                Directory.Delete(dir, true);
             }
         }
     }
