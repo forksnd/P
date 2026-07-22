@@ -2,8 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using NUnit.Framework;
+using System.Text.Json;
 using PChecker;
 using PChecker.Feedback;
+using PChecker.Random;
+using PChecker.Runtime;
 using PChecker.SystematicTesting;
 
 namespace UnitTests
@@ -162,7 +165,7 @@ namespace UnitTests
             // Summary: 1 of 2 scenarios covered, 1 gap.
             StringAssert.Contains("1/2 scenarios covered in >=1 test case; 1 coverage gap.", text);
             // S: covered in both, lists which test cases; 5+3 triggers, 2+1 timelines.
-            StringAssert.Contains("[covered] S: covered in 2/2 test cases (tc1, tc2); 8 total triggers, 3 unique satisfying timelines", text);
+            StringAssert.Contains("[covered] S: covered in 2/2 test cases (tc1, tc2); 8 total triggers, 3 satisfying timelines (summed per test case)", text);
             // Gap: never satisfied anywhere; best progress is the max across test cases.
             StringAssert.Contains("[  GAP  ] Gap: never covered in any of 2 test cases; best progress anywhere 2/4 states", text);
         }
@@ -191,7 +194,7 @@ namespace UnitTests
                 // S covered in both; assert counts + that both test cases are listed (file
                 // enumeration order is filesystem-dependent, so don't pin the order).
                 StringAssert.Contains("[covered] S: covered in 2/2 test cases", text);
-                StringAssert.Contains("2 total triggers, 2 unique satisfying timelines", text);
+                StringAssert.Contains("2 total triggers, 2 satisfying timelines (summed per test case)", text);
                 StringAssert.Contains("tc1", text);
                 StringAssert.Contains("tc2", text);
                 // Gap seen in only one test case, never covered.
@@ -329,7 +332,7 @@ namespace UnitTests
                 // Deduped to ONE test case (the latest run) — not double-counted as two.
                 StringAssert.Contains("across 1 test case", text);
                 StringAssert.Contains("covered in 1/1 test cases", text);
-                StringAssert.Contains("3 unique satisfying timelines", text);  // latest's count, not the older 1
+                StringAssert.Contains("3 satisfying timelines (summed per test case)", text);  // latest's count, not the older 1
             }
             finally
             {
@@ -370,6 +373,219 @@ namespace UnitTests
             {
                 Directory.Delete(dir, true);
             }
+        }
+
+        // ── Satisfaction detection: a cold START state must not be trivially "covered" ──
+
+        [NUnit.Framework.Test]
+        public void IsSatisfyingEntry_ColdStateSatisfies_ExceptTheStartEntry()
+        {
+            // A cold (accepting) state entry satisfies the scenario...
+            Assert.IsTrue(ScenarioSteering.IsSatisfyingEntry(isInHotState: false, isStartEntry: false));
+            // ...UNLESS it is the monitor's first (start) state entry: a `cold start state`
+            // fires during RegisterMonitor before any behavior, and must NOT count as covered.
+            Assert.IsFalse(ScenarioSteering.IsSatisfyingEntry(isInHotState: false, isStartEntry: true));
+            // Hot states never satisfy; unmarked/warm (null) states never satisfy.
+            Assert.IsFalse(ScenarioSteering.IsSatisfyingEntry(isInHotState: true, isStartEntry: false));
+            Assert.IsFalse(ScenarioSteering.IsSatisfyingEntry(isInHotState: true, isStartEntry: true));
+            Assert.IsFalse(ScenarioSteering.IsSatisfyingEntry(isInHotState: null, isStartEntry: false));
+            Assert.IsFalse(ScenarioSteering.IsSatisfyingEntry(isInHotState: null, isStartEntry: true));
+        }
+
+        [NUnit.Framework.Test]
+        public void MergeDirectory_SkipsArtifactsFromANewerSchemaVersion()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "scencov_ver_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                // A current (v1) artifact.
+                var ok = NewReport();
+                ok.RecordScenarioSatisfied("S", "<t1>");
+                ScenarioCoverageMerger.Write(ok, "tcCurrent", Path.Combine(root, "cur" + ScenarioCoverageMerger.FileSuffix));
+
+                // A future-schema artifact (version bumped): fields may mean something else, so it
+                // must be SKIPPED, not silently miscounted as v1.
+                File.WriteAllText(Path.Combine(root, "future" + ScenarioCoverageMerger.FileSuffix),
+                    "{\"version\": 999, \"testCase\": \"tcFuture\", \"scenarios\": [" +
+                    "{\"name\": \"S\", \"satisfied\": true, \"satisfyingSchedules\": 7, " +
+                    "\"distinctSatisfyingTimelines\": 3, \"maxStatesVisited\": 3, \"monitorStates\": 3}]}");
+
+                var text = ScenarioCoverageMerger.MergeDirectory(root);
+
+                StringAssert.Contains("across 1 test case", text);   // only the v1 artifact counted
+                StringAssert.Contains("tcCurrent", text);
+                StringAssert.DoesNotContain("tcFuture", text);
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        // ── Observer: drives ScenarioComplianceObserver directly (the end-to-end seam the
+        // pure IsSatisfyingEntry test cannot reach). Touches PModule static state, so kept
+        // NonParallelizable and always cleaned up. ──
+
+        private class DummyScenarioMonitor { }
+
+        [NUnit.Framework.Test]
+        [NonParallelizable]
+        public void Observer_ColdStartEntryDoesNotSatisfy_ButReEntryDoes()
+        {
+            PModule.coverageMonitors.Clear();
+            PModule.scenarioStateCounts.Clear();
+            try
+            {
+                PModule.coverageMonitors.Add(typeof(DummyScenarioMonitor));
+                PModule.scenarioStateCounts[typeof(DummyScenarioMonitor)] = 2;
+                var mt = typeof(DummyScenarioMonitor).FullName;
+
+                var obs = new ScenarioComplianceObserver();
+                // First entry is the monitor's START state, logged during RegisterMonitor. Even
+                // if it is cold, it must NOT satisfy (no behavior observed yet).
+                obs.OnMonitorStateTransition(mt, "Accept", isEntry: true, isInHotState: false);
+                Assert.AreEqual(0, obs.SatisfiedScenarios.Count, "cold start entry must not satisfy");
+                // A later cold-state entry (reached through observed behavior) DOES satisfy.
+                obs.OnMonitorStateTransition(mt, "Accept", isEntry: true, isInHotState: false);
+                Assert.AreEqual(1, obs.SatisfiedScenarios.Count, "re-entry into a cold state satisfies");
+            }
+            finally
+            {
+                PModule.coverageMonitors.Clear();
+                PModule.scenarioStateCounts.Clear();
+            }
+        }
+
+        [NUnit.Framework.Test]
+        [NonParallelizable]
+        public void Observer_RefreshPicksUpMonitorsPopulatedAfterConstruction_AndNormalPathSatisfies()
+        {
+            PModule.coverageMonitors.Clear();
+            PModule.scenarioStateCounts.Clear();
+            try
+            {
+                // Constructed while PModule is EMPTY (as it is in a real run: the generated
+                // InitializeMonitorMap populates PModule AFTER the observer exists).
+                var obs = new ScenarioComplianceObserver();
+                Assert.IsFalse(obs.HasScenarios);
+
+                PModule.coverageMonitors.Add(typeof(DummyScenarioMonitor));
+                PModule.scenarioStateCounts[typeof(DummyScenarioMonitor)] = 2;
+                var mt = typeof(DummyScenarioMonitor).FullName;
+
+                // Normal scenario: hot start entry (does not satisfy) then a cold accept via behavior.
+                obs.OnMonitorStateTransition(mt, "Init", isEntry: true, isInHotState: true);
+                obs.OnMonitorStateTransition(mt, "Accept", isEntry: true, isInHotState: false);
+
+                Assert.IsTrue(obs.HasScenarios, "Refresh must pick up monitors registered after construction");
+                Assert.IsNotEmpty(obs.AllScenarioNames);
+                Assert.AreEqual(1, obs.SatisfiedScenarios.Count, "hot-start -> cold-accept must satisfy");
+            }
+            finally
+            {
+                PModule.coverageMonitors.Clear();
+                PModule.scenarioStateCounts.Clear();
+            }
+        }
+
+        // ── Merge/report robustness: graceful degradation + zero-scenario contracts ──
+
+        [NUnit.Framework.Test]
+        public void MergeDirectory_SkipsCorruptJson_AndMergesTheValidArtifact()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "scencov_bad_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var ok = NewReport();
+                ok.RecordScenarioSatisfied("S", "<t1>");
+                ScenarioCoverageMerger.Write(ok, "tcGood", Path.Combine(root, "good" + ScenarioCoverageMerger.FileSuffix));
+
+                // A truncated/corrupt artifact must be skipped, not crash the merge.
+                File.WriteAllText(Path.Combine(root, "bad" + ScenarioCoverageMerger.FileSuffix), "{ this is not valid json ");
+
+                var text = ScenarioCoverageMerger.MergeDirectory(root);
+
+                StringAssert.Contains("across 1 test case", text);
+                StringAssert.Contains("tcGood", text);
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        [NUnit.Framework.Test]
+        public void MergeDirectory_EmptyDirectory_ReportsZeroTestCasesWithoutCrashing()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "scencov_empty_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var text = ScenarioCoverageMerger.MergeDirectory(root);
+                StringAssert.Contains("across 0 test cases", text);
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        [NUnit.Framework.Test]
+        public void ZeroScenarios_ReportOmitsBlock_AndWriteIsNoOp()
+        {
+            var report = NewReport();   // no scenarios recorded
+
+            // The per-run report must not print a scenario-coverage block when there are none.
+            StringAssert.DoesNotContain("Scenario coverage", report.GetText(CheckerConfiguration.Create()));
+
+            // And Write must not create an artifact file.
+            var dir = Path.Combine(Path.GetTempPath(), "scencov_none_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var path = Path.Combine(dir, "none" + ScenarioCoverageMerger.FileSuffix);
+                ScenarioCoverageMerger.Write(report, "tcEmpty", path);
+                Assert.IsFalse(File.Exists(path), "no scenarios -> no artifact written");
+            }
+            finally
+            {
+                Directory.Delete(dir, true);
+            }
+        }
+
+        // ── Determinism: same seed -> identical artifact (RNG reseed x accounting x serialization) ──
+
+        [NUnit.Framework.Test]
+        public void SameSeed_ProducesIdenticalScenarioArtifact_DifferentSeedDiffers()
+        {
+            string RunOnce(uint seed)
+            {
+                var cfg = CheckerConfiguration.Create();
+                cfg.RandomGeneratorSeed = seed;
+                var rng = new RandomValueGenerator(cfg);   // reseeds deterministically from the seed
+                var report = new TestReport(cfg);
+                report.EnsureScenarioTracked("Alpha");
+                report.EnsureScenarioTracked("Beta");
+                for (var i = 0; i < 50; i++)
+                {
+                    if (rng.Next(2) == 0)
+                    {
+                        report.RecordScenarioSatisfied("Alpha", "<t" + rng.Next(5) + ">");
+                    }
+                    else
+                    {
+                        report.RecordScenarioProgress("Beta", rng.Next(3), 3);
+                    }
+                }
+                return JsonSerializer.Serialize(
+                    ScenarioCoverageMerger.FromReport(report, "tcDet"),
+                    new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+            }
+
+            Assert.AreEqual(RunOnce(12345), RunOnce(12345), "same seed must produce a byte-identical artifact");
+            Assert.AreNotEqual(RunOnce(12345), RunOnce(99999), "different seeds should produce different coverage");
         }
     }
 }
